@@ -1,0 +1,12 @@
+#-----------------------------------------------------------
+# Vivado v2018.3 (64-bit)
+# SW Build 2405991 on Thu Dec  6 23:38:27 MST 2018
+# IP Build 2404404 on Fri Dec  7 01:43:56 MST 2018
+# Start of session at: Wed Oct  7 16:56:12 2026
+# Process ID: 7508
+# Current directory: C:/hw1/hw1.runs/synth_1
+# Command line: vivado.exe -log connter12.vds -product Vivado -mode batch -messageDb vivado.pb -notrace -source connter12.tcl
+# Log file: C:/hw1/hw1.runs/synth_1/connter12.vds
+# Journal file: C:/hw1/hw1.runs/synth_1\vivado.jou
+#-----------------------------------------------------------
+source connter12.tcl -notrace
