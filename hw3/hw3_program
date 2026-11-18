@@ -1,0 +1,176 @@
+VHDL
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.STD_LOGIC_UNSIGNED.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+entity hw3_mode1_color is
+    Port (
+        clk        : in  STD_LOGIC;
+        rst        : in  STD_LOGIC;                     -- BTNC (P16, Active-High)
+        hsync      : out STD_LOGIC;
+        vsync      : out STD_LOGIC;
+        vga_r      : out STD_LOGIC_VECTOR(3 downto 0);
+        vga_g      : out STD_LOGIC_VECTOR(3 downto 0);
+        vga_b      : out STD_LOGIC_VECTOR(3 downto 0)
+    );
+end hw3_mode1_color;
+
+architecture Behavioral of hw3_mode1_color is
+
+    -- 25MHz Pixel Clock Enable
+    signal clk_cnt : STD_LOGIC_VECTOR(1 downto 0) := "00";
+    signal pclk_en : STD_LOGIC := '0';
+
+    -- 640x480 @ 60Hz 時序常數
+    constant H_DISPLAY : integer := 640;
+    constant H_FRONT   : integer := 16;
+    constant H_SYNC    : integer := 96;
+    constant H_BACK    : integer := 48;
+    constant H_TOTAL   : integer := 800;
+
+    constant V_DISPLAY : integer := 480;
+    constant V_FRONT   : integer := 10;
+    constant V_SYNC    : integer := 2;
+    constant V_BACK    : integer := 33;
+    constant V_TOTAL   : integer := 525;
+
+    signal h_cnt : integer range 0 to H_TOTAL - 1 := 0;
+    signal v_cnt : integer range 0 to V_TOTAL - 1 := 0;
+    signal video_on : STD_LOGIC := '0';
+
+    -- 圖形判斷中間訊號
+    signal is_disk, is_tri, is_sq : boolean := false;
+    signal is_shape : boolean := false; -- 只要碰到任一圖形即為 True
+
+    -- 20秒計時與顏色狀態
+    -- 100MHz = 10ns週期，20秒需要數 2,000,000,000 次
+    signal sec20_cnt   : integer range 0 to 2000000000 := 0; 
+    signal color_state : integer range 0 to 2 := 0; -- 0:紅, 1:綠, 2:藍
+
+begin
+
+    --------------------------------------------------------------------
+    -- 1. 25MHz Pixel Clock Enable (100MHz / 4)
+    --------------------------------------------------------------------
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            clk_cnt <= "00";
+            pclk_en <= '0';
+        elsif rising_edge(clk) then
+            if clk_cnt = "11" then
+                clk_cnt <= "00";
+                pclk_en <= '1';
+            else
+                clk_cnt <= clk_cnt + 1;
+                pclk_en <= '0';
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------
+    -- 2. 20 秒計時器與顏色切換狀態機 (由 100MHz 直接驅動)
+    --------------------------------------------------------------------
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            sec20_cnt   <= 0;
+            color_state <= 0;
+        elsif rising_edge(clk) then
+            if sec20_cnt = 2000000000 - 1 then
+                sec20_cnt <= 0;
+                -- 每 20 秒切換下一個顏色狀態
+                if color_state = 2 then
+                    color_state <= 0;
+                else
+                    color_state <= color_state + 1;
+                end if;
+            else
+                sec20_cnt <= sec20_cnt + 1;
+            end if;
+        end if;
+    end process;
+
+    --------------------------------------------------------------------
+    -- 3. VGA 水平與垂直座標計數器
+    --------------------------------------------------------------------
+    process(clk, rst)
+    begin
+        if rst = '1' then
+            h_cnt <= 0;
+            v_cnt <= 0;
+        elsif rising_edge(clk) then
+            if pclk_en = '1' then
+                if h_cnt = H_TOTAL - 1 then
+                    h_cnt <= 0;
+                    if v_cnt = V_TOTAL - 1 then
+                        v_cnt <= 0;
+                    else
+                        v_cnt <= v_cnt + 1;
+                    end if;
+                else
+                    h_cnt <= h_cnt + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    hsync <= '0' when (h_cnt >= (H_DISPLAY + H_FRONT) and h_cnt < (H_DISPLAY + H_FRONT + H_SYNC)) else '1';
+    vsync <= '0' when (v_cnt >= (V_DISPLAY + V_FRONT) and v_cnt < (V_DISPLAY + V_FRONT + V_SYNC)) else '1';
+    video_on <= '1' when (h_cnt < H_DISPLAY and v_cnt < V_DISPLAY) else '0';
+
+    --------------------------------------------------------------------
+    -- 4. 幾何圖形數學判斷
+    --------------------------------------------------------------------
+    process(h_cnt, v_cnt)
+        variable dx_d, dy_d, dist2_d : integer;
+        variable tri_dx, tri_y_rel   : integer;
+    begin
+        -- (1) 實心圓盤 Disk: 中心(120, 240), 半徑 50 (R^2 = 2500)
+        dx_d := h_cnt - 120;
+        dy_d := v_cnt - 240;
+        dist2_d := dx_d * dx_d + dy_d * dy_d;
+        is_disk <= (dist2_d <= 2500);
+
+        -- (2) 三角形 Triangle: 頂點(320, 140), 底邊高 340 (高度200)
+        tri_y_rel := v_cnt - 140;
+        tri_dx    := abs(h_cnt - 320);
+        is_tri    <= (v_cnt >= 140 and v_cnt <= 340 and tri_dx <= (tri_y_rel * 3 / 5));
+
+        -- (3) 正方形 Square: X(470 ~ 570), Y(190 ~ 290)
+        is_sq     <= (h_cnt >= 470 and h_cnt < 570 and v_cnt >= 190 and v_cnt < 290);
+
+        -- 綜合判斷：只要掃描到這三個形狀的任何一點，就視為「繪圖區」
+        is_shape <= is_disk or is_tri or is_sq;
+    end process;
+
+    --------------------------------------------------------------------
+    -- 5. RGB 色彩輸出 (依據 20 秒計時器切換)
+    --------------------------------------------------------------------
+    process(video_on, is_shape, color_state)
+    begin
+        if video_on = '1' then
+            if is_shape then
+                -- 若位在圖形區域，則根據 color_state 決定全圖形的統一顏色
+                case color_state is
+                    when 0 =>
+                        vga_r <= "1111"; vga_g <= "0000"; vga_b <= "0000"; -- 第一個 20 秒：全紅
+                    when 1 =>
+                        vga_r <= "0000"; vga_g <= "1111"; vga_b <= "0000"; -- 第二個 20 秒：全綠
+                    when 2 =>
+                        vga_r <= "0000"; vga_g <= "0000"; vga_b <= "1111"; -- 第三個 20 秒：全藍
+                    when others =>
+                        vga_r <= "0000"; vga_g <= "0000"; vga_b <= "0000";
+                end case;
+            else
+                -- 畫面背景 (全黑)
+                vga_r <= "0000"; vga_g <= "0000"; vga_b <= "0000";
+            end if;
+        else
+            -- 飛回區消隱
+            vga_r <= "0000"; vga_g <= "0000"; vga_b <= "0000";
+        end if;
+    end process;
+
+end Behavioral;
