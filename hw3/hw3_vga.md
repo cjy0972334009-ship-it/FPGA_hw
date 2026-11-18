@@ -20,45 +20,70 @@ HW3 系統內部包含兩組獨立運作的狀態控制機制：**VGA 掃描時�
 
 ### 狀態圖 (State Diagram)
 
-```mermaid
+    ###圖一：VGA 掃描時序狀態機（獨立時序控制）
+
+負責控制電子束在螢幕上的掃描節奏與消隱同步脈衝（640×480 @ 60Hz）：
 stateDiagram-v2
     direction LR
-    [*] --> ACTIVE_DISPLAY : rst = '1' (系統重置)
+    [*] --> ACTIVE_DISPLAY : rst = '1' (系統重置歸零)
 
-    state "VGA 掃描週期 (640x480 @ 60Hz)" as VGA_SCAN {
-        ACTIVE_DISPLAY : 顯示區 (Active Area)
-        ACTIVE_DISPLAY : h_cnt < 640 & v_cnt < 480
-        ACTIVE_DISPLAY : video_on = '1' (允許輸出 RGB)
+    ACTIVE_DISPLAY : 1. 顯示區 (Active Area)
+    ACTIVE_DISPLAY : h_cnt < 640 & v_cnt < 480
+    ACTIVE_DISPLAY : video_on = '1' (允許輸出 RGB)
 
-        FRONT_PORCH : 前沿消隱 (Front Porch)
-        FRONT_PORCH : H: 640~655 / V: 480~489
-        FRONT_PORCH : video_on = '0' (RGB 強制歸零)
+    FRONT_PORCH : 2. 前沿消隱 (Front Porch)
+    FRONT_PORCH : H: 640~655 / V: 480~489
+    FRONT_PORCH : video_on = '0' (RGB 強制歸零)
 
-        SYNC_PULSE : 同步脈衝 (Sync Pulse)
-        SYNC_PULSE : H: 656~751 (hsync = '0')
-        SYNC_PULSE : V: 490~491 (vsync = '0')
+    SYNC_PULSE : 3. 同步脈衝 (Sync Pulse)
+    SYNC_PULSE : H: 656~751 (hsync = '0')
+    SYNC_PULSE : V: 490~491 (vsync = '0')
 
-        BACK_PORCH : 後沿校準 (Back Porch)
-        BACK_PORCH : H: 752~799 / V: 492~524
-        BACK_PORCH : 準備進入下一行或下一幀
+    BACK_PORCH : 4. 後沿校準 (Back Porch)
+    BACK_PORCH : H: 752~799 / V: 492~524
+    BACK_PORCH : 穩定黑電平，準備下一行/下一幀
 
-        ACTIVE_DISPLAY --> FRONT_PORCH : 抵達顯示區邊界
-        FRONT_PORCH --> SYNC_PULSE : 進入同步脈衝區間
-        SYNC_PULSE --> BACK_PORCH : 同步脈衝結束
-        BACK_PORCH --> ACTIVE_DISPLAY : 計數滿歸零 (800 / 525)
+    ACTIVE_DISPLAY --> FRONT_PORCH : 到達顯示邊界 (640 / 480)
+    FRONT_PORCH --> SYNC_PULSE : 進入同步區間 (656 / 490)
+    SYNC_PULSE --> BACK_PORCH : 脈衝結束 (752 / 492)
+    BACK_PORCH --> ACTIVE_DISPLAY : 計數滿歸零 (800 / 525)
+
+   ###圖二：形狀座標掃描與 20 秒顏色變更狀態機
+
+負責即時判斷當前掃描座標 (h_cnt, v_cnt) 是否落在三個幾何圖形內，並依據 20 秒計時器切換統一顯示顏色：
+stateDiagram-v2
+    direction TB
+    [*] --> COLOR_RED : rst = '1' (重置初始為紅色)
+
+    state "形狀座標掃描判定 (即時組合邏輯)" as SHAPE_SCAN {
+        CHECK_COORD : 掃描當前像素 (h_cnt, v_cnt)
+        IS_SHAPE : 命中任一幾何圖形 (is_shape = True)
+        IS_SHAPE : 1. 實心圓盤: (X-120)² + (Y-240)² <= 2500
+        IS_SHAPE : 2. 等腰三角形: 140<=Y<=340 & |X-320|<=(Y-140)*3/5
+        IS_SHAPE : 3. 正方形: 470<=X<570 & 190<=Y<290
+        BG_BLACK : 背景區域 (is_shape = False)
+        BG_BLACK : 輸出全黑 RGB = "0000"
+
+        CHECK_COORD --> IS_SHAPE : 座標符合幾何不等式
+        CHECK_COORD --> BG_BLACK : 座標位於空白背景區
     }
 
-    state "自動變色狀態機 (20秒週期)" as COLOR_FSM {
-        RED_STATE : 狀態 0：全紅 (R = "1111")
-        GREEN_STATE : 狀態 1：全綠 (G = "1111")
-        BLUE_STATE : 狀態 2：全藍 (B = "1111")
+    state "20 秒自動顏色變更狀態機 (color_state)" as COLOR_FSM {
+        COLOR_RED : 狀態 0：全紅顯示
+        COLOR_RED : vga_r = "1111", G = "0000", B = "0000"
 
-        RED_STATE --> GREEN_STATE : 20秒計時滿 (2×10^9 clk)
-        GREEN_STATE --> BLUE_STATE : 20秒計時滿 (2×10^9 clk)
-        BLUE_STATE --> RED_STATE : 20秒計時滿 (2×10^9 clk)
+        COLOR_GREEN : 狀態 1：全綠顯示
+        COLOR_GREEN : vga_r = "0000", G = "1111", B = "0000"
+
+        COLOR_BLUE : 狀態 2：全藍顯示
+        COLOR_BLUE : vga_r = "0000", G = "0000", B = "1111"
+
+        COLOR_RED --> COLOR_GREEN : sec20_cnt 計滿 20 秒 (2×10⁹ clk)
+        COLOR_GREEN --> COLOR_BLUE : sec20_cnt 計滿 20 秒 (2×10⁹ clk)
+        COLOR_BLUE --> COLOR_RED : sec20_cnt 計滿 20 秒 (2×10⁹ clk)
     }
-```
 
+    IS_SHAPE --> COLOR_FSM : 依目前 color_state 上色
 ### 狀態定義與轉移說明
 
 | 狀態模組 | 狀態名稱 | 系統行為說明 | 狀態轉移條件 |
